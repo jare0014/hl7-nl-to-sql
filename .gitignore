@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+hl7_data_lake.db
+chroma_db/
+Chatbot Discussions/
