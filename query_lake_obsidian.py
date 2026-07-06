@@ -161,49 +161,8 @@ def generate_clinical_summary(question, sql, rows, columns):
     except Exception as e:
         return f"Error synthesizing clinical summary: {e}"
 
-def process_file_query(file_path):
-    """Reads frontmatter, extracts query, runs translation/execution, and writes back."""
-    if not os.path.exists(file_path):
-        print(f"Error: File '{file_path}' not found.")
-        return
-        
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-        
-    # Parse Frontmatter robustly (ignoring BOM and spaces)
-    content_clean = content.lstrip("\ufeff").lstrip()
-    if not content_clean.startswith("---"):
-        print("Error: Markdown file has no frontmatter (doesn't start with ---).")
-        return
-        
-    parts = content_clean.split("---", 2)
-    if len(parts) < 3:
-        print("Error: Markdown file has no frontmatter (incomplete delimiters).")
-        return
-        
-    frontmatter_text = parts[1].strip()
-    body_text = parts[2]
-    
-    # Parse YAML fields simply
-    fm_lines = frontmatter_text.splitlines()
-    nl_query = ""
-    query_line_idx = -1
-    
-    for idx, line in enumerate(fm_lines):
-        if line.startswith("nl_query:"):
-            nl_query = line.replace("nl_query:", "", 1).strip()
-            # Remove enclosing quotes if present
-            if (nl_query.startswith('"') and nl_query.endswith('"')) or (nl_query.startswith("'") and nl_query.endswith("'")):
-                nl_query = nl_query[1:-1]
-            query_line_idx = idx
-            break
-            
-    if not nl_query:
-        print("No active natural language query found in frontmatter.")
-        return
-        
-    print(f"Processing query: '{nl_query}'")
-    
+def run_query(nl_query):
+    """Resolves semantic mapping, translates query to SQL, executes SQL, and generates summary."""
     # Resolve semantic mappings from ChromaDB
     mappings = {}
     try:
@@ -266,18 +225,69 @@ def process_file_query(file_path):
     3. Do NOT add filters or constraints on the 'flag' or 'gender' columns unless they are explicitly resolved and listed in the "Resolved Database Mappings" block above. For example, if the user asks for "highest" or "maximum", do not filter by flag = 'H' unless 'flag = H' is explicitly resolved in the mappings. Instead, use mathematical aggregates (MAX, MIN) or sorting (ORDER BY ... DESC LIMIT 1) to find superlatives.
     """
     
-    try:
-        sql = call_llm(prompt).strip()
-        sql = sql.replace("```sql", "").replace("```", "").strip()
-    except Exception as e:
-        print(f"LLM Error: {e}")
-        return
-        
+    sql = call_llm(prompt).strip()
+    sql = sql.replace("```sql", "").replace("```", "").strip()
+    
     # Execute SQL
     results_markdown, rows, columns = execute_sql(sql)
     
     # Generate clinical summary
     clinical_summary = generate_clinical_summary(nl_query, sql, rows, columns)
+    
+    return {
+        "sql": sql,
+        "clinical_summary": clinical_summary,
+        "results_markdown": results_markdown,
+        "rows": rows,
+        "columns": columns,
+        "mappings": mappings
+    }
+
+def process_file_query(file_path):
+    """Reads frontmatter, extracts query, runs translation/execution, and writes back."""
+    if not os.path.exists(file_path):
+        print(f"Error: File '{file_path}' not found.")
+        return
+        
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    # Parse Frontmatter robustly (ignoring BOM and spaces)
+    content_clean = content.lstrip("\ufeff").lstrip()
+    if not content_clean.startswith("---"):
+        print("Error: Markdown file has no frontmatter (doesn't start with ---).")
+        return
+        
+    parts = content_clean.split("---", 2)
+    if len(parts) < 3:
+        print("Error: Markdown file has no frontmatter (incomplete delimiters).")
+        return
+        
+    frontmatter_text = parts[1].strip()
+    body_text = parts[2]
+    
+    # Parse YAML fields simply
+    fm_lines = frontmatter_text.splitlines()
+    nl_query = ""
+    query_line_idx = -1
+    
+    for idx, line in enumerate(fm_lines):
+        if line.startswith("nl_query:"):
+            nl_query = line.replace("nl_query:", "", 1).strip()
+            # Remove enclosing quotes if present
+            if (nl_query.startswith('"') and nl_query.endswith('"')) or (nl_query.startswith("'") and nl_query.endswith("'")):
+                nl_query = nl_query[1:-1]
+            query_line_idx = idx
+            break
+            
+    if not nl_query:
+        print("No active natural language query found in frontmatter.")
+        return
+        
+    print(f"Processing query: '{nl_query}'")
+    
+    # Run query logic
+    res = run_query(nl_query)
     
     # Append results block to the body with Callout styling
     new_results_block = f"""
@@ -286,15 +296,15 @@ def process_file_query(file_path):
 * **Question:** {nl_query}
 
 > [!NOTE] 📋 Clinical Summary
-> {clinical_summary}
+> {res['clinical_summary']}
 
 * **Generated SQL:**
   ```sql
-  {sql}
+  {res['sql']}
   ```
 
 #### 📊 Database Records
-{results_markdown}
+{res['results_markdown']}
 """
     
     body_text = body_text.rstrip() + "\n" + new_results_block + "\n"
