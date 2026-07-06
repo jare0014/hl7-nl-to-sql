@@ -58,8 +58,13 @@ def call_llm(prompt):
     if provider == "ollama":
         ollama_url = os.environ.get("OLLAMA_HOST") or os.environ.get("OLLAMA_URL") or settings.get("ollamaUrl", "http://localhost:11434")
         ollama_url = ollama_url.rstrip("/")
+        if not ollama_url.startswith(("http://", "https://")):
+            ollama_url = f"http://{ollama_url}"
+        host_part = ollama_url.split("://")[-1]
+        if ":" not in host_part:
+            ollama_url = f"{ollama_url}:11434"
         url = f"{ollama_url}/v1/chat/completions"
-        model_name = os.environ.get("OLLAMA_MODEL") or settings.get("templateModel") or settings.get("customTemplateModel") or "qwen2.5-coder:7b"
+        model_name = os.environ.get("OLLAMA_MODEL") or settings.get("executorModel") or settings.get("customExecutorModel") or "qwen2.5-coder:7b"
         payload = {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],

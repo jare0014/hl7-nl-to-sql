@@ -57,8 +57,13 @@ def call_llm(prompt, json_format=False):
     if provider == "ollama":
         ollama_url = os.environ.get("OLLAMA_HOST") or os.environ.get("OLLAMA_URL") or settings.get("ollamaUrl", "http://localhost:11434")
         ollama_url = ollama_url.rstrip("/")
+        if not ollama_url.startswith(("http://", "https://")):
+            ollama_url = f"http://{ollama_url}"
+        host_part = ollama_url.split("://")[-1]
+        if ":" not in host_part:
+            ollama_url = f"{ollama_url}:11434"
         url = f"{ollama_url}/v1/chat/completions"
-        model_name = os.environ.get("OLLAMA_MODEL") or settings.get("templateModel") or settings.get("customTemplateModel") or "qwen2.5-coder:7b"
+        model_name = os.environ.get("OLLAMA_MODEL") or settings.get("executorModel") or settings.get("customExecutorModel") or "qwen2.5-coder:7b"
         payload = {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
@@ -128,32 +133,57 @@ def ingest_message(content, filename):
         cleaned = clean_json_response(response_text)
         data = json.loads(cleaned)
         
+        # Sanitize parsed fields to prevent list-binding errors
+        mrn = data.get("mrn")
+        if isinstance(mrn, list):
+            mrn = mrn[0] if mrn else ""
+        mrn = str(mrn) if mrn is not None else ""
+        
+        name = data.get("patient_name") or data.get("name")
+        if isinstance(name, list):
+            name = name[0] if name else ""
+        name = str(name) if name is not None else ""
+        
+        dob = data.get("dob")
+        if isinstance(dob, list):
+            dob = dob[0] if dob else ""
+        dob = str(dob) if dob is not None else ""
+        
+        gender = data.get("gender")
+        if isinstance(gender, list):
+            gender = gender[0] if gender else ""
+        gender = str(gender) if gender is not None else ""
+        
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Insert Patient
-        cursor.execute("""
-        INSERT INTO patients (mrn, name, dob, gender)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(mrn) DO UPDATE SET
-            name=excluded.name,
-            dob=excluded.dob,
-            gender=excluded.gender;
-        """, (data["mrn"], data["patient_name"], data["dob"], data["gender"]))
-        
-        # Insert Observations if present
-        for obs in data.get("results", []):
-            # Check for empty observation blocks
-            if not obs.get("test_name"):
-                continue
+        try:
+            cursor = conn.cursor()
+            # Insert Patient
             cursor.execute("""
-            INSERT INTO observations (mrn, test_name, value, unit, flag, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?);
-            """, (data["mrn"], obs["test_name"], obs["value"], obs["unit"], obs["flag"], obs["timestamp"]))
+            INSERT INTO patients (mrn, name, dob, gender)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(mrn) DO UPDATE SET
+                name=excluded.name,
+                dob=excluded.dob,
+                gender=excluded.gender;
+            """, (mrn, name, dob, gender))
             
-        conn.commit()
-        conn.close()
-        print(f"Successfully processed {filename} for patient {data['patient_name']}.")
+            # Insert Observations if present
+            for obs in data.get("results", []):
+                # Check for empty observation blocks
+                if not obs.get("test_name"):
+                    continue
+                val = obs.get("value")
+                if isinstance(val, (list, dict)):
+                    val = str(val)
+                cursor.execute("""
+                INSERT INTO observations (mrn, test_name, value, unit, flag, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """, (mrn, obs.get("test_name"), val, obs.get("unit"), obs.get("flag"), obs.get("timestamp")))
+                
+            conn.commit()
+            print(f"Successfully processed {filename} for patient {name}.")
+        finally:
+            conn.close()
     except Exception as e:
         print(f"Error processing {filename}: {e}")
         try:
