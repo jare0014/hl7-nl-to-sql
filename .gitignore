@@ -4,3 +4,9 @@ __pycache__/
 hl7_data_lake.db
 chroma_db/
 Chatbot Discussions/
+
+# Ignore Dev Logs
+*Dev Log.md
+*dev log.md
+*dev-log.md
+*Dev-Log.md
